@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import io
-import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import boto3
 import pandas as pd
@@ -24,9 +24,7 @@ GROUP_ID: str = "big-daddyks"
 REGION: str = "eu-south-2"
 EXCHANGE: str = "BINANCE"
 
-ASSETS: List[Dict[str, str]] = [
-    {"symbol": "SOLUSD", "slug": "SOLUSD"},
-]
+ASSETS: List[str] = ["SOLUSD"]
 
 DAYS_BACK: int = 4 * 365
 USE_CALENDAR_YEARS: bool = False
@@ -36,7 +34,9 @@ DRY_RUN: bool = False
 BUCKET_NAME_SUFFIX: str = ""
 S3_CONTENT_TYPE: str = "text/csv"
 
-STATE_PREFIX: str = "_state"
+# We turn this to False if we do not want to delete the data that is older than 4 years
+ENABLE_RETENTION_CLEANUP: bool = True  
+RETENTION_YEARS: int = 4
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,12 @@ def utc_today() -> date:
 
 def first_day_of_month(d: date) -> date:
     return date(d.year, d.month, 1)
+
+
+def add_months(d: date, months: int) -> date:
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    return date(y, m, 1)
 
 
 def build_bucket_name(group_id: str, suffix: str = "") -> str:
@@ -94,53 +100,12 @@ def ensure_bucket_exists(s3_client, bucket_name: str, region: str) -> None:
         raise
 
 
-def state_key(asset_slug: str) -> str:
-    return f"{STATE_PREFIX}/{asset_slug}/last_ingested.json"
-
-
-def read_last_ingested_date(s3_client, bucket: str, asset_slug: str) -> Optional[date]:
-    key = state_key(asset_slug)
-    try:
-        obj = s3_client.get_object(Bucket=bucket, Key=key)
-        payload = obj["Body"].read().decode("utf-8")
-        data = json.loads(payload)
-        iso = data.get("last_ingested_date")
-        if not iso:
-            return None
-        return date.fromisoformat(iso)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("NoSuchKey", "404"):
-            return None
-        raise
-    except Exception:
-        return None
-
-
-def write_last_ingested_date(s3_client, bucket: str, asset_slug: str, d: date) -> None:
-    key = state_key(asset_slug)
-    body = json.dumps(
-        {"last_ingested_date": d.isoformat(), "updated_at_utc": datetime.now(timezone.utc).isoformat()},
-        ensure_ascii=False,
-    )
-    if DRY_RUN:
-        print(f"[DRY_RUN] Would write state: s3://{bucket}/{key} -> {d.isoformat()}")
-        return
-
-    s3_client.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=body.encode("utf-8"),
-        ContentType="application/json",
-    )
-
-
 def compute_run_window(last_ingested: Optional[date], days_back: int, use_calendar_years: bool) -> RunWindow:
     end_needed = utc_today()
 
     if last_ingested is None:
         if use_calendar_years:
-            start_needed = (pd.Timestamp(end_needed) - pd.DateOffset(years=4)).date()
+            start_needed = (pd.Timestamp(end_needed) - pd.DateOffset(years=RETENTION_YEARS)).date()
         else:
             start_needed = end_needed - timedelta(days=days_back)
     else:
@@ -153,12 +118,21 @@ def compute_run_window(last_ingested: Optional[date], days_back: int, use_calend
     return RunWindow(start_needed=start_needed, end_needed=end_needed, start_fetch=start_fetch)
 
 
-def fetch_tradingview_daily_history(
-    symbol: str,
-    exchange: str,
-    start_date: date,
-    end_date: date,
-) -> pd.DataFrame:
+def retention_cutoff_month_start(use_calendar_years: bool) -> date:
+    today = utc_today()
+    if use_calendar_years:
+        cutoff = (pd.Timestamp(today) - pd.DateOffset(years=RETENTION_YEARS)).date()
+    else:
+        cutoff = today - timedelta(days=DAYS_BACK)
+    return first_day_of_month(cutoff)
+
+
+def data_key(asset_prefix: str, symbol: str, year: int, month: int) -> str:
+    mm = f"{month:02d}"
+    return f"{asset_prefix}/{year}/{mm}/{symbol}_{year}-{mm}.csv"
+
+
+def fetch_tradingview_daily_history(symbol: str, exchange: str, start_date: date, end_date: date) -> pd.DataFrame:
     tv = TradingViewData()
 
     try:
@@ -234,11 +208,6 @@ def dataframe_to_csv_text(df: pd.DataFrame) -> str:
     return buf.getvalue()
 
 
-def data_key(asset_slug: str, symbol: str, year: int, month: int) -> str:
-    mm = f"{month:02d}"
-    return f"{asset_slug}/{year}/{mm}/{symbol}_{year}-{mm}.csv"
-
-
 def upload_csv(s3_client, bucket: str, key: str, csv_text: str) -> None:
     if DRY_RUN:
         print(f"[DRY_RUN] Would upload: s3://{bucket}/{key}")
@@ -251,37 +220,137 @@ def upload_csv(s3_client, bucket: str, key: str, csv_text: str) -> None:
     )
 
 
+def infer_last_ingested_from_s3(s3_client, bucket: str, asset_prefix: str) -> Optional[date]:
+    pattern = re.compile(rf"^{re.escape(asset_prefix)}/(\d{{4}})/(\d{{2}})/.+_(\d{{4}})-(\d{{2}})\.csv$")
+    latest_year_month: Optional[Tuple[int, int]] = None
+    latest_key: Optional[str] = None
+
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=f"{asset_prefix}/"):
+        for obj in page.get("Contents", []):
+            k = obj["Key"]
+            m = pattern.match(k)
+            if not m:
+                continue
+            y = int(m.group(1))
+            mo = int(m.group(2))
+            ym = (y, mo)
+            if latest_year_month is None or ym > latest_year_month:
+                latest_year_month = ym
+                latest_key = k
+
+    if not latest_key:
+        return None
+
+    try:
+        obj = s3_client.get_object(Bucket=bucket, Key=latest_key)
+        df = pd.read_csv(obj["Body"])
+    except Exception:
+        return None
+
+    if "datetime" not in df.columns:
+        return None
+
+    dt = pd.to_datetime(df["datetime"], errors="coerce", utc=True).dropna()
+    if dt.empty:
+        return None
+
+    return dt.max().date()
+
+
+def list_existing_month_prefixes(s3_client, bucket: str, asset_prefix: str) -> Set[Tuple[int, int]]:
+    months: Set[Tuple[int, int]] = set()
+    pattern = re.compile(rf"^{re.escape(asset_prefix)}/(\d{{4}})/(\d{{2}})/")
+
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=f"{asset_prefix}/"):
+        for obj in page.get("Contents", []):
+            k = obj["Key"]
+            m = pattern.match(k)
+            if not m:
+                continue
+            y = int(m.group(1))
+            mo = int(m.group(2))
+            if 1 <= mo <= 12:
+                months.add((y, mo))
+
+    return months
+
+
+def delete_prefix_recursive(s3_client, bucket: str, prefix: str) -> int:
+    deleted = 0
+    paginator = s3_client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+        if not keys:
+            continue
+        for i in range(0, len(keys), 1000):
+            chunk = keys[i : i + 1000]
+            if DRY_RUN:
+                deleted += len(chunk)
+                continue
+            s3_client.delete_objects(Bucket=bucket, Delete={"Objects": chunk, "Quiet": True})
+            deleted += len(chunk)
+    return deleted
+
+
+def retention_cleanup_months(s3_client, bucket: str, asset_prefix: str, cutoff_month: date) -> None:
+    months = list_existing_month_prefixes(s3_client, bucket, asset_prefix)
+    if not months:
+        return
+
+    cutoff_ym = (cutoff_month.year, cutoff_month.month)
+    to_delete = sorted([ym for ym in months if ym < cutoff_ym])
+
+    if not to_delete:
+        return
+
+    total_deleted = 0
+    for (y, m) in to_delete:
+        mm = f"{m:02d}"
+        prefix = f"{asset_prefix}/{y}/{mm}/"
+        removed = delete_prefix_recursive(s3_client, bucket, prefix)
+        total_deleted += removed
+
+    print(f"{asset_prefix}: retention cleanup deleted objects: {total_deleted}")
+
+
 def main() -> int:
     s3_client = boto3.client("s3", region_name=REGION)
     bucket = build_bucket_name(GROUP_ID, BUCKET_NAME_SUFFIX)
     ensure_bucket_exists(s3_client, bucket, REGION)
+
+    cutoff_month = retention_cutoff_month_start(USE_CALENDAR_YEARS)
 
     print("=== TradeData Batch Ingestion ===")
     print(f"Bucket: {bucket}")
     print(f"Region: {REGION}")
     print(f"Exchange: {EXCHANGE}")
     print(f"DRY_RUN: {DRY_RUN}")
+    print(f"Retention cleanup: {ENABLE_RETENTION_CLEANUP} (months < {cutoff_month})")
     print("")
 
-    for asset in ASSETS:
-        symbol = asset["symbol"]
-        slug = asset["slug"]
+    for symbol in ASSETS:
+        asset_prefix = symbol
 
-        last_ingested = read_last_ingested_date(s3_client, bucket, slug)
+        if ENABLE_RETENTION_CLEANUP:
+            try:
+                retention_cleanup_months(s3_client, bucket, asset_prefix, cutoff_month)
+            except Exception as e:
+                print(f"ERROR: retention cleanup failed for {symbol}: {e}")
+
+        last_ingested = infer_last_ingested_from_s3(s3_client, bucket, asset_prefix)
         window = compute_run_window(last_ingested, DAYS_BACK, USE_CALENDAR_YEARS)
-
-        if last_ingested is not None and window.start_needed == window.end_needed and window.start_needed > last_ingested:
-            pass
 
         if last_ingested is not None and window.start_needed > window.end_needed:
             print(f"{symbol}: nothing to do.")
             continue
 
-        if last_ingested is not None and window.start_needed == window.end_needed and window.start_needed == last_ingested:
+        if last_ingested is not None and window.start_needed == window.end_needed and window.start_needed <= last_ingested:
             print(f"{symbol}: nothing to do.")
             continue
 
-        print(f"--- Asset: {symbol} ({slug}) ---")
+        print(f"--- Asset: {symbol} ---")
         print(f"Last ingested: {last_ingested.isoformat() if last_ingested else 'None'}")
         print(f"Need: {window.start_needed} -> {window.end_needed}")
         print(f"Fetch from: {window.start_fetch} -> {window.end_needed}")
@@ -299,31 +368,30 @@ def main() -> int:
 
         partitions = partition_by_year_month(df)
 
-        affected_keys: List[Tuple[int, int]] = []
+        affected_month_start = first_day_of_month(window.start_needed)
+        current_month_start = first_day_of_month(window.end_needed)
+
+        affected: List[Tuple[int, int]] = []
         for (y, m) in partitions.keys():
             month_start = date(y, m, 1)
-            if month_start >= first_day_of_month(window.start_needed) and month_start <= first_day_of_month(window.end_needed):
-                affected_keys.append((y, m))
+            if affected_month_start <= month_start <= current_month_start:
+                affected.append((y, m))
 
-        affected_keys = sorted(set(affected_keys))
-        if not affected_keys:
+        affected = sorted(set(affected))
+        if not affected:
             print(f"{symbol}: nothing to upload.")
             continue
 
         uploaded = 0
-        for (y, m) in affected_keys:
+        for (y, m) in affected:
             part_df = partitions[(y, m)]
-            key = data_key(slug, symbol, y, m)
+            key = data_key(asset_prefix, symbol, y, m)
             csv_text = dataframe_to_csv_text(part_df)
             try:
                 upload_csv(s3_client, bucket, key, csv_text)
                 uploaded += 1
             except Exception as e:
                 print(f"ERROR: upload failed s3://{bucket}/{key}: {e}")
-                continue
-
-        if uploaded > 0:
-            write_last_ingested_date(s3_client, bucket, slug, window.end_needed)
 
         print(f"Uploaded partitions: {uploaded}")
         print("")
