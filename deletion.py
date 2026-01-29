@@ -1,5 +1,5 @@
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError     
 
 def delete_buckets_by_prefix(
     prefix: str,
