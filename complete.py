@@ -130,6 +130,9 @@ def retention_cutoff_month_start(use_calendar_years: bool) -> date:
 def data_key(asset_prefix: str, symbol: str, year: int, month: int) -> str:
     mm = f"{month:02d}"
     return f"Asset={asset_prefix}/year={year}/month={mm}/data.csv"
+
+
+    return f"Asset={asset_prefix}/year={year}/month={mm}/data.csv"
  
  
 def fetch_tradingview_daily_history(symbol: str, exchange: str, start_date: date, end_date: date) -> pd.DataFrame:
