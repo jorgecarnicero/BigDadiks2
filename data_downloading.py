@@ -17,6 +17,14 @@ def load_data():
     )
 
     return solana_data
+    
+def s3_creator():
+
+    client = boto3.client('s3')
+
+    client.create_bucket()
+
+
 
 def main():
     
