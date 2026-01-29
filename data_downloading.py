@@ -1,6 +1,6 @@
 from TradingviewData import TradingViewData,Interval
 import boto3
-from constantes import *
+from constants import *
 
 
 def load_data():
@@ -34,3 +34,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+    
