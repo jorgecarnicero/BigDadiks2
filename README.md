@@ -1,78 +1,119 @@
+# TradeData – Sprint 1
 
-# TradingView Data For any Indexes and Stocks
+Arquitectura Big Data para datos de trading de criptomonedas
 
-A Simple TradingView Data Downloader. TradinViewData allows downloading upto 5000 Candles on any of the supported timeframe.
+## 📌 Descripción del proyecto
 
-    
-# Usage
+Este proyecto forma parte de la asignatura **Tecnologías de Procesamiento Big Data** del **3º Grado en Ingeniería Matemática e Inteligencia Artificial**.
+En este **Sprint 1** se diseña e implementa la base de un **Data Lake en AWS** para la ingesta y almacenamiento de datos históricos de trading de criptomonedas.
 
-```Python
-from TradingviewData import TradingViewData,Interval
+El objetivo principal es obtener datos históricos diarios desde **TradingView (BINANCE)**, almacenarlos de forma eficiente en **Amazon S3** y preparar el sistema para futuros procesos de análisis y procesamiento Big Data.
 
-request = TradingViewData()
+---
+
+## 🎯 Objetivos del Sprint 1
+
+* Descargar un histórico de ~4 años de datos diarios de mercado.
+* Diseñar una arquitectura de almacenamiento escalable en Amazon S3.
+* Implementar una ingesta **incremental** e **idempotente**.
+* Aplicar políticas de **retención automática** de datos.
+* Realizar un **Análisis Exploratorio de Datos (EDA)** para validar la calidad del dataset.
+
+---
+
+## 🧱 Arquitectura
+
+* **Proveedor Cloud**: AWS
+* **Servicio principal**: Amazon S3
+* **Región**: `eu-south-2` (España)
+* **Estrategia**: Bucket único con particionado lógico
+
+### Estructura en S3
+
+```
+Asset=CRIPTO/
+ └── Year=YYYY/
+     └── month=MM/
+         └── data.csv
 ```
 
+Ejemplo:
 
-# Get Symbol
-
-
-To find the exact symbols for an instrument you can use ``` request.search_symbol ``` method.
-
-```Python
-
-request.search('METAL','MCX')
+```
+Asset=SOLUSD/Year=2024/month=03/data.csv
 ```
 
-Other method is check Manually via [Tradingview Search]("https://www.tradingview.com/markets/indices/").
+---
 
+## 📊 Datos
 
-# Getting Data
+* **Fuente**: TradingView
+* **Exchange**: BINANCE
+* **Activo**: SOLUSD (Solana)
+* **Frecuencia**: Diaria (1D)
+* **Formato**: CSV
+* **Schema**:
 
+  ```
+  datetime, symbol, open, high, low, close, volume
+  ```
 
-## Index
+---
 
-```Python
-nifty_data = request.get_hist(symbol='NIFTY',exchange='NSE',interval=Interval.hour_1,n_bars=1000)
-```
-## Futures continuous contract
+## ⚙️ Implementación
 
-```Python
-nifty_futures = request.get_hist(symbol='NIFTY',exchange='NSE',interval=Interval.hour_1,n_bars=1000,fut_contract=1)
-```
+El pipeline está implementado en **Python** y automatiza todo el proceso ETL:
 
-## Stocks
+### Funcionalidades clave
 
-```Python
-relience_data = request.get_hist(symbol='RELIANCE',exchange='NSE',interval=Interval.min_5,n_bars=5000)
-```
+* **Smart Caching**: detecta el último dato disponible en S3 y descarga solo los datos faltantes.
+* **Carga incremental**: evita reprocesar históricos completos innecesariamente.
+* **Gestión de retención**: elimina automáticamente datos con más de 4 años.
+* **Idempotencia**: crea el bucket si no existe y permite ejecuciones repetidas sin errores.
+* **Infraestructura como código**: la infraestructura se gestiona desde el propio script.
 
-## MCX
+---
 
-```Python
-crudeoil_data = request.get_hist(symbol='CRUDEOIL',exchange='MCX',interval=Interval.hour_1,n_bars=5000)
-```
+## 📈 Análisis Exploratorio de Datos (EDA)
 
-## Downloading data for extended market hours
+Se ha realizado un EDA exhaustivo mediante un notebook Jupyter (`eda.ipynb`) para:
 
+* Validar integridad y coherencia de los datos OHLCV.
+* Comprobar cobertura temporal completa (sin días faltantes).
+* Analizar volatilidad, retornos, outliers y volumen.
+* Confirmar que los datos son aptos para futuros sprints de análisis y visualización.
 
-```Python
-extended_data = request.get_hist(symbol="EICHERMOT",exchange="NSE",interval=Interval.hour_1,n_bars=500, extended_session=False)
-```
+---
 
+## ▶️ Ejecución
 
-## Supported Time Frames
+1. Configurar credenciales de AWS.
+2. Ejecutar el script principal de ingesta:
 
+   ```bash
+   python complete.py
+   ```
+3. (Opcional) Eliminar infraestructura/datos:
 
-#####  1 Minute = min_1
-#####  3 Minute = min_3
-#####  5 Minute = min_5
-#####  15 Minute = min_15
-#####  30 Minute = min_30
-#####  45 Minute = min_45
-#####  1 Hour = hour_1
-#####  2 Hour = hour_2
-#####  3 Hour = hour_3
-#####  4 Hour = hour_4
-#####  1 Day = daily
-#####  1 Week = weekly
-#####  1 Month = monthy
+   ```bash
+   python deletion.py
+   ```
+
+---
+
+## 🧪 Resultados
+
+* Creación automática del bucket en S3.
+* Estructura particionada por activo, año y mes.
+* Descargas optimizadas (solo datos nuevos).
+* Dataset limpio, completo y validado.
+
+---
+
+## 👥 Autores
+
+* Jorge Carnicero Príncipe
+* Andrés Gil Vicente
+* Jorge González Pérez
+
+---
