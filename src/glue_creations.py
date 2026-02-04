@@ -1,6 +1,6 @@
 import boto3
 import sys
-import os
+import os 
 
 # ==========================================
 # 🛑 CONFIGURACIÓN DINÁMICA
