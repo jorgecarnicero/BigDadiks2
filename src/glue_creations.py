@@ -96,7 +96,7 @@ def run_glue_process(group_id: str, bucket_name: str):
 if __name__ == "__main__":
     
     # Configuration matching your Ingestion Script
-    ACTUAL_GROUP_ID = "big-daddyks"  
+    ACTUAL_GROUP_ID = "imat3a05"  
     
     # Constructing the Single Bucket Name
     ACTUAL_BUCKET_NAME = f"trade-data-{ACTUAL_GROUP_ID}-main"

@@ -74,6 +74,6 @@ def delete_glue_resources(group_id: str):
 if __name__ == "__main__":
     
     # Must match your project ID
-    ACTUAL_GROUP_ID = "big-daddyks"  
+    ACTUAL_GROUP_ID = "imat3a05"  
     
     delete_glue_resources(ACTUAL_GROUP_ID)
