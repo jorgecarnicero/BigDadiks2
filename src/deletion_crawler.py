@@ -19,7 +19,7 @@ def delete_glue_resources(group_id: str):
 
     # Naming conventions (Must match your creation script)
     db_name = f"trade_data_{group_id}".replace("-", "_")
-    crawler_name = f"crawler_{group_id}_bronze"
+    crawler_name = f"crawler_{group_id}"
 
     print(f"🔥 [CLEANUP] Starting cleanup for Group ID: {group_id}")
     print(f"   Target DB: {db_name}")
@@ -43,7 +43,7 @@ def delete_glue_resources(group_id: str):
             
             print("⏳ Waiting for Crawler to stop (this might take a moment)...")
             while status != 'READY':
-                time.sleep(2)
+                time.sleep(1)
                 crawler = glue_client.get_crawler(Name=crawler_name)
                 status = crawler['Crawler']['State']
                 print(f"   Status: {status}...")
@@ -74,6 +74,6 @@ def delete_glue_resources(group_id: str):
 if __name__ == "__main__":
     
     # Must match your project ID
-    ACTUAL_GROUP_ID = "big-daddyks"  
-    
+    ACTUAL_GROUP_ID = "imat3a05"  
+
     delete_glue_resources(ACTUAL_GROUP_ID)

@@ -32,11 +32,11 @@ def run_glue_process(group_id: str, bucket_name: str):
     # We keep the DB name generic so all layers (bronze/silver/gold) can live in the same DB later
     db_name = f"trade_data_{group_id}".replace("-", "_")
     
-    # The crawler is specific to the Bronze layer
-    crawler_name = f"crawler_{group_id}_bronze"
+    # The crawler
+    crawler_name = f"crawler_{group_id}"
     
-    # IMPORTANT: Target specifically the 'bronze' folder
-    s3_target_path = f"s3://{bucket_name}/bronze/"
+    # IMPORTANT: Target specifically the folder
+    s3_target_path = f"s3://{bucket_name}/bronze"
 
     print(f"🔄 [GLUE] Starting management in Region: {AWS_REGION}")
     print(f"   Using Role: ...{GLUE_ROLE_ARN.split('/')[-1]}") 
@@ -96,9 +96,9 @@ def run_glue_process(group_id: str, bucket_name: str):
 if __name__ == "__main__":
     
     # Configuration matching your Ingestion Script
-    ACTUAL_GROUP_ID = "big-daddyks"  
+    ACTUAL_GROUP_ID = "imat3a05"  
     
     # Constructing the Single Bucket Name
-    ACTUAL_BUCKET_NAME = f"trade-data-{ACTUAL_GROUP_ID}-main"
+    ACTUAL_BUCKET_NAME = f"trade-data-big-daddyks-main"
     
     run_glue_process(ACTUAL_GROUP_ID, ACTUAL_BUCKET_NAME)
