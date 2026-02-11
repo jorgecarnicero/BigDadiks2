@@ -2,7 +2,7 @@
 """
 Batch ingest for bronze with cache/retention.
 Reads TradingView data for ASSETS and uploads CSVs to S3 partitioned as
-bronze/Asset=<asset>/year=YYYY/month=MM/data.csv (keeps original Asset= to avoid breaking past runs).
+bronze/asset=<asset>/year=YYYY/month=MM/data.csv
 """
 
 from __future__ import annotations
@@ -132,8 +132,8 @@ def retention_cutoff_month_start(use_calendar_years: bool) -> date:
 
 def data_key(asset_prefix: str, symbol: str, year: int, month: int) -> str:
     mm = f"{month:02d}"
-    # Keep Asset= (legacy) to avoid breaking existing layout
-    return f"{LAYER_PREFIX}/Asset={asset_prefix}/year={year}/month={mm}/data.csv"
+
+    return f"{LAYER_PREFIX}/asset={asset_prefix}/year={year}/month={mm}/data.csv"
 
 
 def fetch_tradingview_daily_history(symbol: str, exchange: str, start_date: date, end_date: date) -> pd.DataFrame:
@@ -225,11 +225,11 @@ def upload_csv(s3_client, bucket: str, key: str, csv_text: str) -> None:
 
 
 def infer_last_ingested_from_s3(s3_client, bucket: str, asset_prefix: str) -> Optional[date]:
-    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/Asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/.*\.csv$")
+    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/.*\.csv$")
     latest_year_month: Optional[Tuple[int, int]] = None
     latest_key: Optional[str] = None
 
-    prefix_query = f"{LAYER_PREFIX}/Asset={asset_prefix}/"
+    prefix_query = f"{LAYER_PREFIX}/asset={asset_prefix}/"
 
     paginator = s3_client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix_query):
@@ -266,10 +266,10 @@ def infer_last_ingested_from_s3(s3_client, bucket: str, asset_prefix: str) -> Op
 
 def list_existing_month_prefixes(s3_client, bucket: str, asset_prefix: str) -> Set[Tuple[int, int]]:
     months: Set[Tuple[int, int]] = set()
-    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/Asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/")
+    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/")
 
     paginator = s3_client.get_paginator("list_objects_v2")
-    search_prefix = f"{LAYER_PREFIX}/Asset={asset_prefix}/"
+    search_prefix = f"{LAYER_PREFIX}/asset={asset_prefix}/"
 
     for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix):
         for obj in page.get("Contents", []):
@@ -316,7 +316,7 @@ def retention_cleanup_months(s3_client, bucket: str, asset_prefix: str, cutoff_m
     total_deleted = 0
     for (y, m) in to_delete:
         mm = f"{m:02d}"
-        prefix = f"{LAYER_PREFIX}/Asset={asset_prefix}/year={y}/month={mm}/"
+        prefix = f"{LAYER_PREFIX}/asset={asset_prefix}/year={y}/month={mm}/"
         removed = delete_prefix_recursive(s3_client, bucket, prefix)
         total_deleted += removed
 
