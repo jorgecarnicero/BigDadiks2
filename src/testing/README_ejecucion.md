@@ -11,7 +11,7 @@ This complements README.md with clearer execution steps and what each part does.
 - Run `setup_bucket_and_scripts.py` locally (uses boto3 + creds):
   - Creates bucket if missing.
   - Seeds visual prefixes: bronze/, silver/, gold/, scripts/, scripts/opencode/, silver/prices/, gold/indicators/.
-  - Uploads local job scripts to S3 `scripts/opencode/`.
+  - Uploads local job scripts to S3 `scripts/`.
 
 ## Step 1: Ingest bronze (CSV with cache/retention)
 - Use your existing `complete.py` to download SOLUSD and upload CSVs to `bronze/asset=SOLUSD/year=YYYY/month=MM/data.csv`.

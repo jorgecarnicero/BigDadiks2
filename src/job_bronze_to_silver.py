@@ -1,0 +1,93 @@
+import sys
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.context import SparkContext
+from pyspark.sql import functions as F
+
+import constants
+
+
+args = getResolvedOptions(
+    sys.argv,
+    [
+        "JOB_NAME",
+        "SRC_DB",
+        "SRC_TABLE",
+        "SILVER_TARGET_PATH",
+        "WRITE_MODE",
+        "PUSH_DOWN",
+        "PARTITION_COLS",
+        "ASSET_DEFAULT",
+    ],
+)
+
+sc = SparkContext()
+# Glue boilerplate: build contexts and job
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+src_db = args["SRC_DB"]
+src_table = args["SRC_TABLE"]
+silver_target = args["SILVER_TARGET_PATH"].rstrip("/") + "/"
+write_mode = (args.get("WRITE_MODE") or "append").lower()
+push_down = (args.get("PUSH_DOWN") or "").strip()
+partition_cols = [c.strip() for c in (args.get("PARTITION_COLS") or constants.PARTITION_COLS).split(",") if c.strip()]
+asset_default = (args.get("ASSET_DEFAULT") or constants.DEFAULT_ASSET).strip()
+
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+spark.conf.set("spark.sql.parquet.compression.codec", "snappy")
+
+read_kwargs = {"database": src_db, "table_name": src_table}
+if push_down:
+    read_kwargs["push_down_predicate"] = push_down
+
+# Load bronze table from Glue Catalog
+dyf = glueContext.create_dynamic_frame_from_catalog(**read_kwargs)
+df = dyf.toDF().dropna(how="all")
+
+# Normalize datetime column (rename to constants.TIME_COL)
+time_col_candidates = [constants.TIME_COL, "time", "timestamp", "date", "datetime", "Date"]
+time_col = next((c for c in time_col_candidates if c in df.columns), None)
+if time_col:
+    df = df.withColumn(constants.TIME_COL, F.to_timestamp(F.col(time_col)))
+    if constants.TIME_COL != time_col:
+        df = df.drop(time_col)
+else:
+    raise Exception(f"No se encontró columna temporal en BRONZE. Busca alguna de {time_col_candidates}.")
+
+# Normalize close price column (rename to constants.CLOSE_COL)
+close_col_candidates = [constants.CLOSE_COL, "Close", "close"]
+close_col = next((c for c in close_col_candidates if c in df.columns), None)
+if close_col:
+    df = df.withColumn(constants.CLOSE_COL, F.col(close_col).cast("double"))
+    if constants.CLOSE_COL != close_col:
+        df = df.drop(close_col)
+else:
+    raise Exception(f"No se encontró columna de cierre en BRONZE. Busca alguna de {close_col_candidates}.")
+
+# Normalize asset (from column or default fallback)
+if constants.ASSET_COL not in df.columns:
+    if "asset" in df.columns:
+        df = df.withColumnRenamed("asset", constants.ASSET_COL)
+    elif "Asset" in df.columns:
+        df = df.withColumn(constants.ASSET_COL, F.col("Asset"))
+    else:
+        # Fallback to a fixed value if not present anywhere
+        df = df.withColumn(constants.ASSET_COL, F.lit(asset_default))
+
+for p in ["year", "month"]:
+    if p in df.columns:
+        df = df.withColumn(p, F.col(p).cast("int"))
+
+df = df.withColumn("_ingest_ts", F.current_timestamp())
+
+(df.write
+  .format("parquet")
+  .mode(write_mode)
+  .partitionBy(*partition_cols)
+  .save(silver_target))
+
+job.commit()
