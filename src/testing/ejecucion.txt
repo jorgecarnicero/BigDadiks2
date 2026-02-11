@@ -1,0 +1,67 @@
+Ejecución de la pipeline HU4 (opencode)
+=======================================
+
+Pre-requisitos
+--------------
+1) Variables de entorno (ver requisitos.txt):
+   - AWS_REGION=eu-south-2
+   - GLUE_JOB_ROLE_ARN=arn:aws:iam::<account-id>:role/<GlueJobRole>
+   - GLUE_CRAWLER_ROLE_ARN=arn:aws:iam::<account-id>:role/Crawler_Role
+2) Crear bucket/prefijos y subir scripts:
+   - Ejecuta localmente `setup_bucket_and_scripts.py` (usa boto3 y creds locales) o hazlo manualmente.
+   - Este script: crea bucket si falta, siembra prefijos visuales (bronze/silver/gold/scripts), y sube los .py a `scripts/opencode/`.
+   - Scripts esperados en S3 (o ajusta SCRIPTS_PREFIX en settings.py):
+     - job_bronze_to_silver.py
+     - job_silver_to_gold_kpis.py
+     - job_run_crawler.py
+     - pipeline_launcher.py
+3) DB existente: trade_data_imat3a05.
+4) Datos bronze ya ingeridos en prefijo: s3://trade-data-big-daddyks-main/bronze/asset=SOLUSD/year=YYYY/month=MM/data.csv
+
+Orden recomendado (automatizado con pipeline_launcher)
+--------------------------------------------------------------
+Ejecuta el job/script pipeline_launcher.py (en Glue o local con credenciales AWS válidas). Este crea/actualiza recursos y lanza en orden:
+1) Crawler único (targets bronze/silver/gold) para asegurar tabla bronze en catálogo.
+2) Job job_bronze_to_silver -> lee bronze (tabla lake_bronze por TablePrefix=lake_) y escribe Parquet silver particionado.
+3) Crawler único de nuevo para registrar/actualizar la tabla silver.
+4) Job job_silver_to_gold_kpis -> lee Parquet silver, calcula KPIs y escribe Parquet gold particionado.
+5) Crawler único otra vez para registrar/actualizar la tabla gold.
+
+Ejecución manual (si no usas bootstrap)
+---------------------------------------
+1) Run crawler: job_run_crawler.py con args
+   --CRAWLER_NAME lake_imat3a05
+   --CRAWLER_DB trade_data_imat3a05
+   --CRAWLER_ROLE_ARN $GLUE_CRAWLER_ROLE_ARN
+   --S3_TARGETS "s3://.../bronze/,s3://.../silver/prices/,s3://.../gold/indicators/"
+   --TABLE_PREFIX lake_
+   --WAIT true
+
+2) Job job_bronze_to_silver.py con args
+   --SRC_DB trade_data_imat3a05
+   --SRC_TABLE lake_bronze
+   --SILVER_TARGET_PATH s3://trade-data-big-daddyks-main/silver/prices/
+   --WRITE_MODE append
+   --PUSH_DOWN "" (opcional)
+   --PARTITION_COLS asset,year,month
+   --ASSET_DEFAULT SOLUSD
+
+3) Run crawler de nuevo (mismos args) para descubrir/actualizar silver.
+
+4) Job job_silver_to_gold_kpis.py con args
+   --SILVER_SOURCE_PATH s3://trade-data-big-daddyks-main/silver/prices/
+   --GOLD_TARGET_PATH s3://trade-data-big-daddyks-main/gold/indicators/
+   --WRITE_MODE append
+   --ASSET_COL asset
+   --TIME_COL datetime
+   --CLOSE_COL close
+   --PARTITION_COLS asset,year,month
+
+5) Run crawler otra vez para descubrir/actualizar gold.
+
+Notas y validaciones
+--------------------
+- Partición en bronze debe ser asset= (minúsculas) para derivar columna asset si el CSV no la trae.
+- Columnas obligatorias para KPIs: asset, datetime, close (datetime se convierte a timestamp, close a double).
+- Particiones en silver y gold: asset/year/month.
+- TablePrefix=lake_ implica tablas lake_bronze, lake_silver, lake_gold en la DB.
