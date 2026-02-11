@@ -1,4 +1,4 @@
-# testing/opencode
+# src (one-click pipeline)
 
 One-command sandbox to run the full pipeline: bucket setup, upload scripts to S3, ingest bronze (complete.py with cache/retention), run Glue pipeline (crawler → bronze_to_silver → crawler → silver_to_gold_kpis → crawler).
 
@@ -8,7 +8,7 @@ One-command sandbox to run the full pipeline: bucket setup, upload scripts to S3
    - GLUE_JOB_ROLE_ARN=arn:aws:iam::<account-id>:role/<GlueJobRole>
    - GLUE_CRAWLER_ROLE_ARN=arn:aws:iam::<account-id>:role/<CrawlerRole>
    - AWS credentials in your session/profile.
-2) From this folder:
+2) From this folder (`src/`):
    ```
    python opencode_run_all.py
    ```
@@ -27,7 +27,7 @@ Edit `constants.py`:
 - Columns/partition: ASSET_COL, TIME_COL, CLOSE_COL, PARTITION_COLS, DEFAULT_ASSET
 Env only: GLUE_JOB_ROLE_ARN, GLUE_CRAWLER_ROLE_ARN (do not hardcode ARNs).
 
-## Files in this folder
+## Files in this folder (`src/`)
 - constants.py: all config knobs
 - opencode_run_all.py: one-click runner
 - job_bronze_to_silver.py: bronze → silver (Parquet) with ASSET fallback

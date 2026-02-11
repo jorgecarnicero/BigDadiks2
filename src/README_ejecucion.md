@@ -1,4 +1,4 @@
-# End-to-end Runbook (testing/opencode)
+# End-to-end Runbook (src)
 
 One-command flow: ensure bucket/prefixes, upload scripts, ingest bronze (complete.py), run Glue pipeline (crawler -> bronze_to_silver -> silver_to_gold_kpis -> crawler).
 
@@ -8,9 +8,8 @@ One-command flow: ensure bucket/prefixes, upload scripts, ingest bronze (complet
    - GLUE_JOB_ROLE_ARN=arn:aws:iam::<account-id>:role/<GlueJobRole>
    - GLUE_CRAWLER_ROLE_ARN=arn:aws:iam::<account-id>:role/<CrawlerRole>
    - AWS credentials in your session/profile.
-2) Run:
+2) Run from `src/`:
    ```
-   cd testing/opencode
    python opencode_run_all.py
    ```
 
