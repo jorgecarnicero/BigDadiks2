@@ -8,7 +8,7 @@ from awsglue.job import Job
 from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
-from pyspark.sql.functions import pandas_udf
+from pyspark.sql.functions import pandas_udf, PandasUDFType
 
 args = getResolvedOptions(
     sys.argv,
@@ -63,7 +63,7 @@ out_schema = StructType(df.schema.fields + [
 ])
 
 
-@pandas_udf(out_schema)
+@pandas_udf(out_schema, PandasUDFType.GROUPED_MAP)
 def add_kpis(pdf: pd.DataFrame) -> pd.DataFrame:
     pdf = pdf.sort_values(time_col).copy()
     close = pdf[close_col].astype(float)
