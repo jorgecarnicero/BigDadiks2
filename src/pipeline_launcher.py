@@ -119,6 +119,7 @@ def main():
             "--S3_TARGETS": ",".join([constants.BRONZE_PREFIX, constants.SILVER_PREFIX, constants.GOLD_PREFIX]),
             "--TABLE_PREFIX": constants.TABLE_PREFIX,
             "--WAIT": "true",
+            "--REGION": constants.REGION,
         },
     )
 

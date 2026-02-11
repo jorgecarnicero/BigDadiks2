@@ -10,8 +10,6 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, DoubleType
 from pyspark.sql.functions import pandas_udf
 
-import constants
-
 args = getResolvedOptions(
     sys.argv,
     [
@@ -36,10 +34,11 @@ silver_path = args["SILVER_SOURCE_PATH"].rstrip("/") + "/"
 gold_path = args["GOLD_TARGET_PATH"].rstrip("/") + "/"
 write_mode = (args.get("WRITE_MODE") or "append").lower()
 
-asset_col = args.get("ASSET_COL") or constants.ASSET_COL
-time_col = args.get("TIME_COL") or constants.TIME_COL
-close_col = args.get("CLOSE_COL") or constants.CLOSE_COL
-partition_cols = [c.strip() for c in (args.get("PARTITION_COLS") or constants.PARTITION_COLS).split(",") if c.strip()]
+# Defaults inlined so the script is self-contained in Glue
+asset_col = args.get("ASSET_COL") or "asset"
+time_col = args.get("TIME_COL") or "datetime"
+close_col = args.get("CLOSE_COL") or "close"
+partition_cols = [c.strip() for c in (args.get("PARTITION_COLS") or "asset,year,month").split(",") if c.strip()]
 
 spark.conf.set("spark.sql.parquet.compression.codec", "snappy")
 

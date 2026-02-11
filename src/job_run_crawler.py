@@ -6,8 +6,6 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.context import SparkContext
 
-import constants
-
 args = getResolvedOptions(
     sys.argv,
     [
@@ -18,6 +16,7 @@ args = getResolvedOptions(
         "S3_TARGETS",
         "TABLE_PREFIX",
         "WAIT",
+        "REGION",
     ],
 )
 
@@ -31,9 +30,10 @@ crawler_db = args["CRAWLER_DB"]
 crawler_role_arn = args["CRAWLER_ROLE_ARN"]
 table_prefix = (args.get("TABLE_PREFIX") or "").strip()
 wait = (args.get("WAIT") or "true").lower() == "true"
+region = args.get("REGION") or "eu-south-2"
 
 s3_targets = [p.strip() for p in args["S3_TARGETS"].split(",") if p.strip()]
-glue = boto3.client("glue", region_name=constants.REGION)
+glue = boto3.client("glue", region_name=region)
 
 
 def ensure_crawler_exists():
@@ -46,8 +46,8 @@ def ensure_crawler_exists():
             TablePrefix=table_prefix,
             Targets={"S3Targets": [{"Path": p} for p in s3_targets]},
             SchemaChangePolicy={
-                "UpdateBehavior": "UPDATE_IN_DATABASE",
-                "DeleteBehavior": "DEPRECATE_IN_DATABASE",
+                "UpdateBehavior": "LOG",
+                "DeleteBehavior": "LOG",
             },
             RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
         )
@@ -60,8 +60,8 @@ def ensure_crawler_exists():
             TablePrefix=table_prefix,
             Targets={"S3Targets": [{"Path": p} for p in s3_targets]},
             SchemaChangePolicy={
-                "UpdateBehavior": "UPDATE_IN_DATABASE",
-                "DeleteBehavior": "DEPRECATE_IN_DATABASE",
+                "UpdateBehavior": "LOG",
+                "DeleteBehavior": "LOG",
             },
             RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
         )
