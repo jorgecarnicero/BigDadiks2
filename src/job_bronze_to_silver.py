@@ -6,19 +6,11 @@ from pyspark.context import SparkContext
 from pyspark.sql import functions as F
 
 
-args = getResolvedOptions(
-    sys.argv,
-    [
-        "JOB_NAME",
-        "SRC_DB",
-        "SRC_TABLE",
-        "SILVER_TARGET_PATH",
-        "WRITE_MODE",
-        "PUSH_DOWN",
-        "PARTITION_COLS",
-        "ASSET_DEFAULT",
-    ],
-)
+_REQUIRED = ["JOB_NAME", "SRC_DB", "SRC_TABLE", "SILVER_TARGET_PATH",
+             "WRITE_MODE", "PARTITION_COLS", "ASSET_DEFAULT"]
+# PUSH_DOWN is optional; only resolve it if actually passed on the command line
+_OPTIONAL = [k for k in ["PUSH_DOWN"] if f"--{k}" in sys.argv]
+args = getResolvedOptions(sys.argv, _REQUIRED + _OPTIONAL)
 
 sc = SparkContext()
 glueContext = GlueContext(sc)

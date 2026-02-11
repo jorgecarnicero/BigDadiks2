@@ -89,7 +89,6 @@ def main():
             "--SRC_TABLE": f"{constants.TABLE_PREFIX}bronze",
             "--SILVER_TARGET_PATH": constants.SILVER_PREFIX,
             "--WRITE_MODE": "append",
-            "--PUSH_DOWN": "",
             "--PARTITION_COLS": constants.PARTITION_COLS,
             "--ASSET_DEFAULT": constants.DEFAULT_ASSET,
         },
