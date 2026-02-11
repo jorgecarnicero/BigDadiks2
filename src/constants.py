@@ -1,5 +1,5 @@
 """
-Central constants for the end-to-end opencode pipeline (testing sandbox).
+Central constants for the end-to-end opencode pipeline.
 Adjust values here to change names/paths without touching the rest of the code.
 """
 
@@ -11,13 +11,17 @@ BUCKET = "trade-data-big-daddyks-main"
 
 # Prefixes for layers
 BRONZE_PREFIX = f"s3://{BUCKET}/bronze/"
-SILVER_PREFIX = f"s3://{BUCKET}/silver/prices/"
-GOLD_PREFIX = f"s3://{BUCKET}/gold/indicators/"
+SILVER_PREFIX = f"s3://{BUCKET}/silver/"
+GOLD_PREFIX = f"s3://{BUCKET}/gold/"
 
-# Database and crawler
+# Database
 GLUE_DB = "trade_data_imat3a05"
-CRAWLER_NAME = "lake_imat3a05"
 TABLE_PREFIX = "lake_"
+
+# Crawlers (one per layer)
+CRAWLER_BRONZE = "lake_bronze_imat3a05"
+CRAWLER_SILVER = "lake_silver_imat3a05"
+CRAWLER_GOLD = "lake_gold_imat3a05"
 
 # Jobs
 JOB_BRONZE_TO_SILVER = "bronze_to_silver_imat3a05"
@@ -29,7 +33,6 @@ SCRIPTS_PREFIX = f"s3://{BUCKET}/scripts/"
 SCRIPT_BRONZE_TO_SILVER = SCRIPTS_PREFIX + "job_bronze_to_silver.py"
 SCRIPT_SILVER_TO_GOLD = SCRIPTS_PREFIX + "job_silver_to_gold_kpis.py"
 SCRIPT_RUN_CRAWLER = SCRIPTS_PREFIX + "job_run_crawler.py"
-SCRIPT_PIPELINE_LAUNCHER = SCRIPTS_PREFIX + "pipeline_launcher.py"
 
 # Columns and partitions
 ASSET_COL = "asset"

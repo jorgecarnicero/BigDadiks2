@@ -24,7 +24,6 @@ def ensure_job(job_name: str, script_location: str, default_args: dict):
 
     try:
         glue.get_job(JobName=job_name)
-        # Delete and recreate to guarantee DefaultArguments are fully replaced
         glue.delete_job(JobName=job_name)
     except glue.exceptions.EntityNotFoundException:
         pass
@@ -32,38 +31,29 @@ def ensure_job(job_name: str, script_location: str, default_args: dict):
     print(f"[OK] Job creado: {job_name}")
 
 
-def ensure_crawler():
-    targets = {"S3Targets": [{"Path": constants.BRONZE_PREFIX}, {"Path": constants.SILVER_PREFIX}, {"Path": constants.GOLD_PREFIX}]}
+def ensure_crawler(crawler_name: str, s3_path: str, table_prefix: str):
+    """Create or update a single crawler for one layer (bronze/silver/gold)."""
+    targets = {"S3Targets": [{"Path": s3_path}]}
+
+    crawler_kwargs = dict(
+        Role=constants.GLUE_CRAWLER_ROLE_ARN,
+        DatabaseName=constants.GLUE_DB,
+        TablePrefix=table_prefix,
+        Targets=targets,
+        SchemaChangePolicy={
+            "UpdateBehavior": "LOG",
+            "DeleteBehavior": "LOG",
+        },
+        RecrawlPolicy={"RecrawlBehavior": "CRAWL_EVERYTHING"},
+    )
 
     try:
-        glue.get_crawler(Name=constants.CRAWLER_NAME)
-        glue.update_crawler(
-            Name=constants.CRAWLER_NAME,
-            Role=constants.GLUE_CRAWLER_ROLE_ARN,
-            DatabaseName=constants.GLUE_DB,
-            TablePrefix=constants.TABLE_PREFIX,
-            Targets=targets,
-            SchemaChangePolicy={
-                "UpdateBehavior": "LOG",
-                "DeleteBehavior": "LOG",
-            },
-            RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
-        )
-        print(f"[OK] Crawler actualizado: {constants.CRAWLER_NAME}")
+        glue.get_crawler(Name=crawler_name)
+        glue.update_crawler(Name=crawler_name, **crawler_kwargs)
+        print(f"[OK] Crawler actualizado: {crawler_name}")
     except glue.exceptions.EntityNotFoundException:
-        glue.create_crawler(
-            Name=constants.CRAWLER_NAME,
-            Role=constants.GLUE_CRAWLER_ROLE_ARN,
-            DatabaseName=constants.GLUE_DB,
-            TablePrefix=constants.TABLE_PREFIX,
-            Targets=targets,
-            SchemaChangePolicy={
-                "UpdateBehavior": "LOG",
-                "DeleteBehavior": "LOG",
-            },
-            RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
-        )
-        print(f"[OK] Crawler creado: {constants.CRAWLER_NAME}")
+        glue.create_crawler(Name=crawler_name, **crawler_kwargs)
+        print(f"[OK] Crawler creado: {crawler_name}")
 
 
 def start_job_and_wait(job_name: str, args: dict):
@@ -81,7 +71,21 @@ def start_job_and_wait(job_name: str, args: dict):
         time.sleep(20)
 
 
+def run_crawler_via_job(crawler_name: str, s3_path: str):
+    """Run the run_crawler Glue job for a specific crawler/path."""
+    start_job_and_wait(constants.JOB_RUN_CRAWLER, {
+        "--CRAWLER_NAME": crawler_name,
+        "--CRAWLER_DB": constants.GLUE_DB,
+        "--CRAWLER_ROLE_ARN": constants.GLUE_CRAWLER_ROLE_ARN,
+        "--S3_TARGET": s3_path,
+        "--TABLE_PREFIX": constants.TABLE_PREFIX,
+        "--WAIT": "true",
+        "--REGION": constants.REGION,
+    })
+
+
 def main():
+    # --- Create/update jobs ---
     ensure_job(
         constants.JOB_BRONZE_TO_SILVER,
         constants.SCRIPT_BRONZE_TO_SILVER,
@@ -113,23 +117,36 @@ def main():
         constants.JOB_RUN_CRAWLER,
         constants.SCRIPT_RUN_CRAWLER,
         default_args={
-            "--CRAWLER_NAME": constants.CRAWLER_NAME,
+            "--CRAWLER_NAME": constants.CRAWLER_BRONZE,
             "--CRAWLER_DB": constants.GLUE_DB,
             "--CRAWLER_ROLE_ARN": constants.GLUE_CRAWLER_ROLE_ARN,
-            "--S3_TARGETS": ",".join([constants.BRONZE_PREFIX, constants.SILVER_PREFIX, constants.GOLD_PREFIX]),
+            "--S3_TARGET": constants.BRONZE_PREFIX,
             "--TABLE_PREFIX": constants.TABLE_PREFIX,
             "--WAIT": "true",
             "--REGION": constants.REGION,
         },
     )
 
-    ensure_crawler()
+    # --- Create/update crawlers (one per layer) ---
+    ensure_crawler(constants.CRAWLER_BRONZE, constants.BRONZE_PREFIX, constants.TABLE_PREFIX)
+    ensure_crawler(constants.CRAWLER_SILVER, constants.SILVER_PREFIX, constants.TABLE_PREFIX)
+    ensure_crawler(constants.CRAWLER_GOLD, constants.GOLD_PREFIX, constants.TABLE_PREFIX)
 
-    start_job_and_wait(constants.JOB_RUN_CRAWLER, {})
+    # --- Pipeline execution ---
+    # 1) Crawl bronze
+    run_crawler_via_job(constants.CRAWLER_BRONZE, constants.BRONZE_PREFIX)
+
+    # 2) Bronze -> Silver
     start_job_and_wait(constants.JOB_BRONZE_TO_SILVER, {})
-    start_job_and_wait(constants.JOB_RUN_CRAWLER, {})
+
+    # 3) Crawl silver
+    run_crawler_via_job(constants.CRAWLER_SILVER, constants.SILVER_PREFIX)
+
+    # 4) Silver -> Gold
     start_job_and_wait(constants.JOB_SILVER_TO_GOLD, {})
-    start_job_and_wait(constants.JOB_RUN_CRAWLER, {})
+
+    # 5) Crawl gold
+    run_crawler_via_job(constants.CRAWLER_GOLD, constants.GOLD_PREFIX)
 
     print("[DONE] Pipeline completo.")
 

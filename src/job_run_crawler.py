@@ -13,7 +13,7 @@ args = getResolvedOptions(
         "CRAWLER_NAME",
         "CRAWLER_DB",
         "CRAWLER_ROLE_ARN",
-        "S3_TARGETS",
+        "S3_TARGET",
         "TABLE_PREFIX",
         "WAIT",
         "REGION",
@@ -28,43 +28,34 @@ job.init(args["JOB_NAME"], args)
 crawler_name = args["CRAWLER_NAME"]
 crawler_db = args["CRAWLER_DB"]
 crawler_role_arn = args["CRAWLER_ROLE_ARN"]
+s3_target = args["S3_TARGET"].strip()
 table_prefix = (args.get("TABLE_PREFIX") or "").strip()
 wait = (args.get("WAIT") or "true").lower() == "true"
 region = args.get("REGION") or "eu-south-2"
 
-s3_targets = [p.strip() for p in args["S3_TARGETS"].split(",") if p.strip()]
 glue = boto3.client("glue", region_name=region)
 
 
 def ensure_crawler_exists():
+    targets = {"S3Targets": [{"Path": s3_target}]}
+    crawler_kwargs = dict(
+        Role=crawler_role_arn,
+        DatabaseName=crawler_db,
+        TablePrefix=table_prefix,
+        Targets=targets,
+        SchemaChangePolicy={
+            "UpdateBehavior": "LOG",
+            "DeleteBehavior": "LOG",
+        },
+        RecrawlPolicy={"RecrawlBehavior": "CRAWL_EVERYTHING"},
+    )
+
     try:
         glue.get_crawler(Name=crawler_name)
-        glue.update_crawler(
-            Name=crawler_name,
-            Role=crawler_role_arn,
-            DatabaseName=crawler_db,
-            TablePrefix=table_prefix,
-            Targets={"S3Targets": [{"Path": p} for p in s3_targets]},
-            SchemaChangePolicy={
-                "UpdateBehavior": "LOG",
-                "DeleteBehavior": "LOG",
-            },
-            RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
-        )
+        glue.update_crawler(Name=crawler_name, **crawler_kwargs)
         return "updated"
     except glue.exceptions.EntityNotFoundException:
-        glue.create_crawler(
-            Name=crawler_name,
-            Role=crawler_role_arn,
-            DatabaseName=crawler_db,
-            TablePrefix=table_prefix,
-            Targets={"S3Targets": [{"Path": p} for p in s3_targets]},
-            SchemaChangePolicy={
-                "UpdateBehavior": "LOG",
-                "DeleteBehavior": "LOG",
-            },
-            RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
-        )
+        glue.create_crawler(Name=crawler_name, **crawler_kwargs)
         return "created"
 
 

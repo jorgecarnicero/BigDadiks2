@@ -1,21 +1,21 @@
 """
-One-click runner for the opencode pipeline (testing sandbox).
+One-click runner for the pipeline.
 
 Phases:
 1) Ensure bucket exists and seed visual prefixes (bronze/silver/gold/scripts).
 2) Upload Glue job scripts to S3 (SCRIPTS_PREFIX).
-3) Run ingestion (reuse complete.py) to load bronze CSVs with cache/retention.
-4) Create/update Glue jobs and crawler, then run the pipeline: crawler -> bronze_to_silver -> crawler -> silver_to_gold_kpis -> crawler.
+3) Run ingestion (complete.py) to load bronze CSVs with cache/retention.
+4) Create/update Glue jobs and crawlers, then run the pipeline:
+   crawler_bronze -> bronze_to_silver -> crawler_silver -> silver_to_gold_kpis -> crawler_gold.
 
 Assumptions:
 - Env vars: AWS creds, AWS_REGION, GLUE_JOB_ROLE_ARN, GLUE_CRAWLER_ROLE_ARN.
 - Bucket/prefix names set in constants.py.
-- Scripts live locally in this folder (job_*.py, pipeline_launcher.py, complete.py).
+- Scripts live locally in src/ (job_*.py, pipeline_launcher.py, complete.py).
 """
 
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import boto3
@@ -36,9 +36,6 @@ PREFIXES = [
     "silver/",
     "gold/",
     "scripts/",
-    "scripts/opencode/",
-    "silver/prices/",
-    "gold/indicators/",
 ]
 
 
@@ -69,7 +66,6 @@ def seed_prefixes(s3_client, bucket: str) -> None:
 
 
 def upload_scripts(s3_client, bucket: str, prefix: str, base_dir: Path) -> None:
-    # Compute key root from prefix
     if prefix.startswith("s3://"):
         _, _, rest = prefix.partition("s3://")
         bucket_from_prefix, _, key_root = rest.partition("/")
@@ -93,7 +89,7 @@ def upload_scripts(s3_client, bucket: str, prefix: str, base_dir: Path) -> None:
 def run_complete_py(base_dir: Path) -> None:
     script = base_dir / "complete.py"
     if not script.exists():
-        raise FileNotFoundError("complete.py not found; place it in testing/opencode/")
+        raise FileNotFoundError("complete.py not found in src/")
     print("[ingest] running complete.py (bronze ingest with cache/retention)...")
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
     if result.returncode != 0:
@@ -106,8 +102,8 @@ def run_complete_py(base_dir: Path) -> None:
 def run_pipeline_launcher(base_dir: Path) -> None:
     script = base_dir / "pipeline_launcher.py"
     if not script.exists():
-        raise FileNotFoundError("pipeline_launcher.py not found; place it in testing/opencode/")
-    print("[pipeline] running pipeline_launcher.py (crawler -> bronze_to_silver -> crawler -> silver_to_gold_kpis -> crawler)...")
+        raise FileNotFoundError("pipeline_launcher.py not found in src/")
+    print("[pipeline] running pipeline_launcher.py ...")
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
     if result.returncode != 0:
         print(result.stdout)
