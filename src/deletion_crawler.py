@@ -75,9 +75,6 @@ if __name__ == "__main__":
     
     # Must match your project ID
     ACTUAL_GROUP_ID = "imat3a05"  
-<<<<<<< HEAD
     
-=======
 
->>>>>>> 558f22a12957c97de460cc8d33d4dedf412c4d57
     delete_glue_resources(ACTUAL_GROUP_ID)
