@@ -24,11 +24,12 @@ def ensure_job(job_name: str, script_location: str, default_args: dict):
 
     try:
         glue.get_job(JobName=job_name)
-        glue.update_job(JobName=job_name, JobUpdate=job_def)
-        print(f"[OK] Job actualizado: {job_name}")
+        # Delete and recreate to guarantee DefaultArguments are fully replaced
+        glue.delete_job(JobName=job_name)
     except glue.exceptions.EntityNotFoundException:
-        glue.create_job(Name=job_name, **job_def)
-        print(f"[OK] Job creado: {job_name}")
+        pass
+    glue.create_job(Name=job_name, **job_def)
+    print(f"[OK] Job creado: {job_name}")
 
 
 def ensure_crawler():
