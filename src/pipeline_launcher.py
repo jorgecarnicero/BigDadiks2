@@ -43,8 +43,8 @@ def ensure_crawler():
             TablePrefix=constants.TABLE_PREFIX,
             Targets=targets,
             SchemaChangePolicy={
-                "UpdateBehavior": "UPDATE_IN_DATABASE",
-                "DeleteBehavior": "DEPRECATE_IN_DATABASE",
+                "UpdateBehavior": "LOG",
+                "DeleteBehavior": "LOG",
             },
             RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
         )
@@ -57,8 +57,8 @@ def ensure_crawler():
             TablePrefix=constants.TABLE_PREFIX,
             Targets=targets,
             SchemaChangePolicy={
-                "UpdateBehavior": "UPDATE_IN_DATABASE",
-                "DeleteBehavior": "DEPRECATE_IN_DATABASE",
+                "UpdateBehavior": "LOG",
+                "DeleteBehavior": "LOG",
             },
             RecrawlPolicy={"RecrawlBehavior": "CRAWL_NEW_FOLDERS_ONLY"},
         )
