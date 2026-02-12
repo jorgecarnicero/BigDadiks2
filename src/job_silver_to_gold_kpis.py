@@ -60,13 +60,22 @@ out_schema = StructType(df.schema.fields + [
     StructField("macd", DoubleType()),
     StructField("macd_signal", DoubleType()),
     StructField("macd_hist", DoubleType()),
+
+    StructField("log_return_1", DoubleType()),
+    StructField("realized_vol_20_ann", DoubleType()),
+    StructField("drawdown", DoubleType()),
+    StructField("max_drawdown_252", DoubleType()),
+    StructField("bb_percent_b_20_2", DoubleType()),
 ])
+
 
 
 @pandas_udf(out_schema, PandasUDFType.GROUPED_MAP)
 def add_kpis(pdf: pd.DataFrame) -> pd.DataFrame:
     pdf = pdf.sort_values(time_col).copy()
     close = pdf[close_col].astype(float)
+
+    pdf["log_return_1"] = np.log(close / close.shift(1))
 
     pdf["sma_200"] = close.rolling(window=200, min_periods=200).mean()
     pdf["ema_50"] = close.ewm(span=50, adjust=False, min_periods=50).mean()
@@ -90,6 +99,21 @@ def add_kpis(pdf: pd.DataFrame) -> pd.DataFrame:
     pdf["macd"] = macd
     pdf["macd_signal"] = signal
     pdf["macd_hist"] = hist
+
+    pdf["realized_vol_20_ann"] = pdf["log_return_1"].rolling(window=20, min_periods=20).std() * np.sqrt(252)
+
+    pdf["drawdown"] = close / close.cummax() - 1
+
+    # max_drawdown_252: rolling min de drawdown (ya calculado) en ventana 252
+    pdf["max_drawdown_252"] = pdf["drawdown"].rolling(window=252, min_periods=252).min()
+
+    sma_20 = close.rolling(window=20, min_periods=20).mean()
+    std_20 = close.rolling(window=20, min_periods=20).std()
+    upper = sma_20 + 2 * std_20
+    lower = sma_20 - 2 * std_20
+    pdf["bb_percent_b_20_2"] = (close - lower) / (upper - lower)
+
+
 
     return pdf
 
