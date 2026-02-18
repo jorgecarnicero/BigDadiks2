@@ -41,7 +41,7 @@ def ensure_crawler(crawler_name: str, s3_path: str, table_prefix: str):
         TablePrefix=table_prefix,
         Targets=targets,
         SchemaChangePolicy={
-            "UpdateBehavior": "LOG",
+            "UpdateBehavior": "UPDATE_IN_DATABASE",
             "DeleteBehavior": "LOG",
         },
         RecrawlPolicy={"RecrawlBehavior": "CRAWL_EVERYTHING"},
