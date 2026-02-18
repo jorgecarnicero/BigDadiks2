@@ -112,7 +112,7 @@ def add_kpis(pdf: pd.DataFrame) -> pd.DataFrame:
     upper = sma_20 + 2 * std_20
     lower = sma_20 - 2 * std_20
     pdf["bb_percent_b_20_2"] = (close - lower) / (upper - lower)
-
+ 
 
 
     return pdf
