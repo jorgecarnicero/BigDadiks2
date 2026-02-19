@@ -84,7 +84,7 @@ ASSETS: List[str] = ["SOLUSD"]  # Anade mas: ["SOLUSD", "BTCUSD", "ETHUSD"]
 
 ```bash
 cd src
-python opencode_run_all.py
+python run_all.py
 ```
 
 Esto ejecuta todo el pipeline de forma automatica:
@@ -132,7 +132,7 @@ python pipeline_launcher.py
 ```
 src/
   constants.py               Configuracion central (bucket, region, nombres de jobs/crawlers)
-  opencode_run_all.py         Runner principal: ejecuta todo el pipeline con un comando
+  run_all.py         Runner principal: ejecuta todo el pipeline con un comando
   complete.py                 Ingesta: descarga datos de TradingView y sube CSVs a Bronze
   pipeline_launcher.py        Orquestador: crea jobs/crawlers en Glue y ejecuta el pipeline
   job_bronze_to_silver.py     [Glue Job] Transforma Bronze CSV -> Silver Parquet
@@ -146,7 +146,7 @@ src/
 
 | Archivo | Donde corre | Descripcion |
 |---------|-------------|-------------|
-| `opencode_run_all.py` | Tu maquina | Orquesta todo |
+| `run_all.py` | Tu maquina | Orquesta todo |
 | `complete.py` | Tu maquina | Descarga de TradingView + upload a S3 |
 | `pipeline_launcher.py` | Tu maquina | Crea recursos en Glue y lanza el pipeline |
 | `job_bronze_to_silver.py` | AWS Glue (Spark) | Se sube a S3 y lo ejecuta Glue |

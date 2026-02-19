@@ -1,5 +1,5 @@
 """
-Central constants for the end-to-end opencode pipeline.
+Central constants for the end-to-end pipeline.
 Adjust values here to change names/paths without touching the rest of the code.
 """
 

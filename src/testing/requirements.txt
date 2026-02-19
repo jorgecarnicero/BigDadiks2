@@ -1,6 +1,0 @@
-# Dependencias mínimas para jobs Glue (Spark) y utilidades locales
-boto3
-pandas
-numpy
-
-# En entorno Glue, awsglue y pyspark ya están disponibles.
