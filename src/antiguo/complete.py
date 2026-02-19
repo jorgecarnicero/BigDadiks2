@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Batch ingest for bronze with cache/retention.
-Reads TradingView data for ASSETS and uploads CSVs to S3 partitioned as
-bronze/asset=<asset>/year=YYYY/month=MM/data.csv
-"""
-
 from __future__ import annotations
 
 import io
@@ -39,13 +33,13 @@ N_BARS_BUFFER: int = 20
 DRY_RUN: bool = False
 S3_CONTENT_TYPE: str = "text/csv"
 
-ENABLE_RETENTION_CLEANUP: bool = True
+# We turn this to False if we do not want to delete the data that is older than 4 years
+ENABLE_RETENTION_CLEANUP: bool = True  
 RETENTION_YEARS: int = 4
 
-# --- DATA LAKE CONFIG ---
+# --- CONFIGURACIÓN DATA LAKE ---
 BUCKET_NAME: str = f"trade-data-{GROUP_ID}-main"
 LAYER_PREFIX: str = "bronze"
-
 
 @dataclass(frozen=True)
 class RunWindow:
@@ -87,8 +81,8 @@ def ensure_bucket_exists(s3_client, bucket_name: str, region: str) -> None:
                 CreateBucketConfiguration={"LocationConstraint": region},
             )
         print(f"✅ Bucket '{bucket_name}' created")
-
-        # Create visual folders (only if new bucket)
+        
+        # Crear carpetas visuales (solo si el bucket es nuevo)
         s3_client.put_object(Bucket=bucket_name, Key="silver/", Body=b"")
         s3_client.put_object(Bucket=bucket_name, Key="gold/", Body=b"")
 
@@ -132,8 +126,7 @@ def retention_cutoff_month_start(use_calendar_years: bool) -> date:
 
 def data_key(asset_prefix: str, symbol: str, year: int, month: int) -> str:
     mm = f"{month:02d}"
-
-    return f"{LAYER_PREFIX}/asset={asset_prefix}/year={year}/month={mm}/data.csv"
+    return f"{LAYER_PREFIX}/Asset={asset_prefix}/year={year}/month={mm}/data.csv"
 
 
 def fetch_tradingview_daily_history(symbol: str, exchange: str, start_date: date, end_date: date) -> pd.DataFrame:
@@ -182,7 +175,7 @@ def fetch_tradingview_daily_history(symbol: str, exchange: str, start_date: date
         dt = pd.to_datetime(dt, utc=True, errors="coerce")
 
     df["datetime"] = dt
-    df = df.dropna(subset=["datetime"]).copy()
+    df = df.dropna( subset=["datetime"]).copy()
     df = df.sort_values("datetime")
 
     start_ts = pd.Timestamp(start_date).tz_localize("UTC")
@@ -225,11 +218,12 @@ def upload_csv(s3_client, bucket: str, key: str, csv_text: str) -> None:
 
 
 def infer_last_ingested_from_s3(s3_client, bucket: str, asset_prefix: str) -> Optional[date]:
-    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/.*\.csv$")
+    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/Asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/.*\.csv$")
     latest_year_month: Optional[Tuple[int, int]] = None
     latest_key: Optional[str] = None
 
-    prefix_query = f"{LAYER_PREFIX}/asset={asset_prefix}/"
+    
+    prefix_query = f"{LAYER_PREFIX}/Asset={asset_prefix}/"
 
     paginator = s3_client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix_query):
@@ -266,10 +260,12 @@ def infer_last_ingested_from_s3(s3_client, bucket: str, asset_prefix: str) -> Op
 
 def list_existing_month_prefixes(s3_client, bucket: str, asset_prefix: str) -> Set[Tuple[int, int]]:
     months: Set[Tuple[int, int]] = set()
-    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/")
-
+    # 1. CORREGIDO: Regex incluye bronze/
+    pattern = re.compile(rf"^{re.escape(LAYER_PREFIX)}/Asset={re.escape(asset_prefix)}/year=(\d{{4}})/month=(\d{{2}})/")
+    
     paginator = s3_client.get_paginator("list_objects_v2")
-    search_prefix = f"{LAYER_PREFIX}/asset={asset_prefix}/"
+    # 2. CORREGIDO: Prefix incluye bronze/
+    search_prefix = f"{LAYER_PREFIX}/Asset={asset_prefix}/"
 
     for page in paginator.paginate(Bucket=bucket, Prefix=search_prefix):
         for obj in page.get("Contents", []):
@@ -293,7 +289,7 @@ def delete_prefix_recursive(s3_client, bucket: str, prefix: str) -> int:
         if not keys:
             continue
         for i in range(0, len(keys), 1000):
-            chunk = keys[i: i + 1000]
+            chunk = keys[i : i + 1000]
             if DRY_RUN:
                 deleted += len(chunk)
                 continue
@@ -316,7 +312,8 @@ def retention_cleanup_months(s3_client, bucket: str, asset_prefix: str, cutoff_m
     total_deleted = 0
     for (y, m) in to_delete:
         mm = f"{m:02d}"
-        prefix = f"{LAYER_PREFIX}/asset={asset_prefix}/year={y}/month={mm}/"
+        # 3. CORREGIDO: Borrado incluye bronze/
+        prefix = f"{LAYER_PREFIX}/Asset={asset_prefix}/year={y}/month={mm}/"
         removed = delete_prefix_recursive(s3_client, bucket, prefix)
         total_deleted += removed
 
