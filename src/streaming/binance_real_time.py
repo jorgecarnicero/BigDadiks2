@@ -20,4 +20,11 @@ twm.start_kline_socket(
 )
 
 input("Pulsa ENTER para salir\n")
-tw
+twm.stop()
+
+
+
+
+
+
+###################
