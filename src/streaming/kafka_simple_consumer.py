@@ -49,4 +49,47 @@ def main() -> None:
     # Cierra el consumidor
     # CONSUMER.close()
 
-if __na
+if __name__ == "__main__":
+    main()
+    
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+################
+
+
+
+
+
