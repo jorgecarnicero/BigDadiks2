@@ -47,7 +47,7 @@ def produce(data) -> None:
     # Envía el mensaje
     PRODUCER.send(topic=TOPIC, key=key, value=value)
     PRODUCER.flush()
-    PRODUCER.close()
+    # PRODUCER.close()
 
 
 
