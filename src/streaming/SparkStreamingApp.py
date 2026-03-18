@@ -18,8 +18,8 @@ TOPIC_OUT = "imat3a_SOL_BigDaddyks_VWAP"
 schema_entrada = StructType([
     StructField("symbol", StringType(), True),
     StructField("@timestamp", TimestampType(), True), # Spark necesita un timestamp para las ventanas
-    StructField("close", DoubleType(), True),
-    StructField("volume", DoubleType(), True),
+    StructField("close", StringType(), True),
+    StructField("volume", StringType(), True),
     ])
 
 def main():
@@ -41,7 +41,8 @@ def main():
 
     # 3. EL CÁLCULO MÁGICO (Ventanas de 5 minutos + Fórmula VWAP)
     # Primero pre-calculamos (Precio * Volumen)
-    df_precalc = df_json.withColumn("precio_x_volumen", col("close") * col("volume"))
+    df_precalc = df_json.withColumn("precio_x_volumen", col("close").cast("double") * col("volume").cast("double")) \
+                        .withColumn("volume_num", col("volume").cast("double"))
 
     # Agrupamos por símbolo y por ventana de 5 minutos basándonos en el timestamp
     df_agrupado = df_precalc.groupBy(
@@ -49,7 +50,7 @@ def main():
         col("symbol")
     ).agg(
         _sum("precio_x_volumen").alias("sum_pv"),
-        _sum("volume").alias("sum_v")
+        _sum("volume_num").alias("sum_v")
     )
 
     # Calculamos el VWAP final: Sum(P*V) / Sum(V)
@@ -75,7 +76,7 @@ def main():
         .option("kafka.security.protocol", "SASL_PLAINTEXT") \
         .option("kafka.sasl.mechanism", "PLAIN") \
         .option("kafka.sasl.jaas.config", 'org.apache.kafka.common.security.plain.PlainLoginModule required username="kafka_client" password="88b8a35dca1a04da57dc5f3e";') \
-        .option("checkpointLocation", "/tmp/spark_checkpoint_vwap") \
+        .option("checkpointLocation", "/tmp/spark_checkpoint_vwap_v2") \
         .outputMode("update") \
         .trigger(processingTime="1 minute") \
         .start()

@@ -58,6 +58,7 @@ def main() -> None:
                     print(f"Moneda:  {data.get('symbol')}")
                     print(f"Ventana: {data.get('window_start')} a {data.get('window_end')}")
                     print(f"VWAP:    {data.get('vwap')}")
+                    print(f"data:    {data}")
                     print("-" * 40)
                     
     # Cierra el consumidor
