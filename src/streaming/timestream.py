@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Prueba minima de escritura en Amazon Timestream.
-Escribe un registro de prueba en las tablas de Timestream:
-- btc_quotes_raw -> En esta tabla vamos a meter el parámetro de la cotización o el valor "close"
-- btc_vwap_5m -> n esta tabla vamos a meter el kpi "vwap"
+Consumidor Kafka -> Amazon Timestream.
+
+Escucha dos topics y escribe en dos tablas Timestream:
+- imat3a_SOL_BigDaddyks         -> sol_quotes_raw_bigdaddyks (medida: close)
+- imat3a_SOL_BigDaddyks_VWAP    -> sol_vwap_5m_bigdaddyks    (medida: vwap)
+
+Este script se basa en los mensajes generados por:
+- kafka_simple_producer.py (close y volumen por vela 1m)
+- SparkStreamingApp.py (VWAP 5m)
 """
 
 # Importación de librerías necesarias
@@ -13,19 +18,41 @@ from datetime import datetime, timezone # Para el manejo y conversión de fechas
 
 import boto3                 # El SDK de AWS para Python. Nos permite interactuar con los servicios de AWS (como Timestream)
 
+from kafka import KafkaConsumer
+from kafka.structs import TopicPartition
+
 # ==========================================
-# PARÁMETROS DE CONFIGURACIÓN Y PRUEBA
+# PARÁMETROS DE CONFIGURACIÓN
 # ==========================================
 # Aquí se definen las variables globales que le dicen al script dónde escribir y qué datos usar.
-REGION = "eu-west-1"         # La región de AWS donde está alojada tu base de datos (Irlanda)
-DATABASE = "imat3a_crypto_rt"# El nombre de tu base de datos en Amazon Timestream
-QUOTES_TABLE = "btc_quotes_raw" # Tabla para las cotizaciones en crudo
-VWAP_TABLE = "btc_vwap_5m"   # Tabla para el cálculo del Precio Medio Ponderado por Volumen (VWAP)
-SYMBOL = "BTCUSDT"           # El par de criptomonedas que estamos simulando (Bitcoin vs Tether)
-TEST_CLOSE = 74240.12        # Valor simulado del precio de cierre
-TEST_VWAP = 74229.99         # Valor simulado del VWAP
-WINDOW_START = "2026-03-25T15:10:00.000Z" # Inicio de la ventana temporal del dato (formato ISO 8601)
-WINDOW_END = "2026-03-25T15:15:00.000Z"   # Fin de la ventana temporal del dato
+REGION = "eu-west-1"          # Región de AWS
+DATABASE = "imat3a_crypto_rt" # Base de datos en Timestream
+QUOTES_TABLE = "sol_quotes_raw_bigdaddyks"  # Tabla para las cotizaciones en crudo
+VWAP_TABLE = "sol_vwap_5m_bigdaddyks"       # Tabla para el VWAP 5m
+
+# ==========================================
+# Configuración - Parámetros consumer
+# =========================================
+BOOTSTRAP_SERVERS = "51.49.235.244:9092"
+USERNAME = "kafka_client"
+PASSWORD = "88b8a35dca1a04da57dc5f3e"
+TOPIC_S5_1 = "imat3a_SOL_BigDaddyks"       # Mensajes crudos: close/volume por vela 1m
+TOPIC_S5_2 = "imat3a_SOL_BigDaddyks_VWAP"  # Mensajes agregados: vwap y ventana 5m
+GROUP_ID = "imat3a_SOL_BigDaddyks"
+
+# Crea el KafkaConsumer (deserializa clave como texto y valor como JSON)
+CONSUMER = KafkaConsumer(
+    bootstrap_servers=BOOTSTRAP_SERVERS,
+    security_protocol="SASL_PLAINTEXT",
+    sasl_mechanism="PLAIN",
+    sasl_plain_username=USERNAME,
+    sasl_plain_password=PASSWORD,
+    group_id=GROUP_ID,
+    auto_offset_reset="latest",
+    enable_auto_commit=True,
+    key_deserializer=lambda v: v.decode("utf-8"),
+    value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+)
 
 # ==========================================
 # FUNCIONES AUXILIARES
@@ -47,84 +74,139 @@ def iso_to_epoch_ms(value: str) -> str:
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return str(int(dt.timestamp() * 1000))
 
+
+def kafka_ts_to_epoch_ms(kafka_ts_ms: int) -> str:
+    """
+    Kafka entrega el timestamp del mensaje en milisegundos (epoch). Timestream
+    también lo quiere como texto, así que lo convertimos a str.
+    """
+    return str(int(kafka_ts_ms))
+
+
+def build_quote_record(value: dict, kafka_ts_ms: int) -> dict:
+    """
+    Construye el registro para la tabla de cotizaciones (sol_quotes_raw_bigdaddyks).
+    Espera el payload que genera kafka_simple_producer.py:
+    {
+        'symbol': 'SOLUSD',
+        '@timestamp': '2026-03-09T11:21:00Z',
+        'close': '123.45',
+        'volume': '456.78'
+    }
+    """
+
+    symbol = value.get("symbol", "UNKNOWN")
+    # Usamos @timestamp si viene en el mensaje; si no, el timestamp de Kafka
+    event_time_ms = iso_to_epoch_ms(value["@timestamp"]) if "@timestamp" in value else kafka_ts_to_epoch_ms(kafka_ts_ms)
+
+    return {
+        "Dimensions": [
+            {"Name": "symbol", "Value": symbol},
+            {"Name": "source_topic", "Value": TOPIC_S5_1},
+        ],
+        "MeasureName": "close",
+        "MeasureValue": str(float(value.get("close", 0.0))),
+        "MeasureValueType": "DOUBLE",
+        "Time": event_time_ms,
+        "TimeUnit": "MILLISECONDS",
+        "Version": int(time.time() * 1000),
+    }
+
+
+def build_vwap_record(value: dict, kafka_ts_ms: int) -> dict:
+    """
+    Construye el registro para la tabla VWAP (sol_vwap_5m_bigdaddyks).
+    Espera el payload que genera SparkStreamingApp.py:
+    {
+        'window_start': '2026-03-25T15:10:00Z',
+        'window_end':   '2026-03-25T15:15:00Z',
+        'symbol': 'SOLUSD',
+        'vwap': 123.45
+    }
+    """
+
+    symbol = value.get("symbol", "UNKNOWN")
+    window_start = value.get("window_start")
+    window_end = value.get("window_end")
+
+    # Si no viene la ventana, usamos el timestamp Kafka como fallback
+    time_ms = iso_to_epoch_ms(window_end) if window_end else kafka_ts_to_epoch_ms(kafka_ts_ms)
+
+    return {
+        "Dimensions": [
+            {"Name": "symbol", "Value": symbol},
+            {"Name": "window_start", "Value": window_start or ""},
+            {"Name": "window_end", "Value": window_end or ""},
+            {"Name": "source_topic", "Value": TOPIC_S5_2},
+        ],
+        "MeasureName": "vwap",
+        "MeasureValue": str(float(value.get("vwap", 0.0))),
+        "MeasureValueType": "DOUBLE",
+        "Time": time_ms,
+        "TimeUnit": "MILLISECONDS",
+        "Version": int(time.time() * 1000),
+    }
+
 # ==========================================
 # FUNCIÓN PRINCIPAL
 # ==========================================
 
 def main() -> None:
     # 1. Crear el cliente de AWS para escribir en Timestream
-    # Boto3 buscará tus credenciales de AWS automáticamente (en variables de entorno o en ~/.aws/credentials)
+    # Boto3 buscará tus credenciales de AWS automáticamente (variables de entorno o ~/.aws/credentials)
     ts = boto3.client("timestream-write", region_name=REGION)
 
-    # 2. Preparar el registro para la tabla de Cotizaciones (btc_quotes_raw)
-    # Timestream usa un modelo de datos basado en "Dimensiones" (metadatos) y "Medidas" (el valor real).
-    quote_record = {
-        "Dimensions": [ # Las dimensiones sirven para filtrar y agrupar datos después (ej. WHERE symbol = 'BTCUSDT')
-            {"Name": "symbol", "Value": SYMBOL},
-            {"Name": "source_topic", "Value": "imat3a-BTC"},
-            {"Name": "window_start", "Value": WINDOW_START},
-            {"Name": "window_end", "Value": WINDOW_END},
-            {"Name": "event_ts", "Value": WINDOW_END},
-        ],
-        "MeasureName": "close",                # El nombre de la métrica que estamos guardando
-        "MeasureValue": str(float(TEST_CLOSE)),# El valor de la métrica (debe enviarse como texto en la API)
-        "MeasureValueType": "DOUBLE",          # Especificamos que es un número decimal
-        "Time": iso_to_epoch_ms(WINDOW_END),   # El momento exacto en el que ocurrió esta lectura
-        "TimeUnit": "MILLISECONDS",            # La unidad de tiempo del campo anterior
-        "Version": int(time.time() * 1000),    # La versión ayuda a actualizar datos. Si envías el mismo dato con mayor versión, Timestream lo actualiza.
-    }
+    # Subscribirse a los topics
+    CONSUMER.subscribe([TOPIC_S5_1, TOPIC_S5_2])
 
-    # 3. Preparar el registro para la tabla VWAP (btc_vwap_5m)
-    # Estructura idéntica a la anterior, pero con diferentes dimensiones y métrica.
-    vwap_record = {
-        "Dimensions": [
-            {"Name": "symbol", "Value": SYMBOL},
-            {"Name": "window_start", "Value": WINDOW_START},
-            {"Name": "window_end", "Value": WINDOW_END},
-            {"Name": "source_topic", "Value": "imat3a-BTC-VWAP-test"},
-        ],
-        "MeasureName": "vwap",                 # Ahora la métrica es el VWAP
-        "MeasureValue": str(float(TEST_VWAP)), # El valor del VWAP
-        "MeasureValueType": "DOUBLE",
-        "Time": iso_to_epoch_ms(WINDOW_END),
-        "TimeUnit": "MILLISECONDS",
-        "Version": int(time.time() * 1000) + 1, # Se suma 1 a la versión para asegurar que sea única respecto a la ejecución anterior si fuera en el mismo milisegundo
-    }
+    # Bucle principal: lee y escribe de forma continua
+    while True:
+        # Lee mensajes cada segundo
+        records = CONSUMER.poll(timeout_ms=1000)
 
-    # 4. Enviar los datos a AWS Timestream
-    # Llamamos a la API write_records pasándole la base de datos, la tabla y la lista de registros a insertar.
-    
-    # Escribir en la primera tabla
-    quote_resp = ts.write_records(
-        DatabaseName=DATABASE,
-        TableName=QUOTES_TABLE,
-        Records=[quote_record],
-    )
-    
-    # Escribir en la segunda tabla
-    vwap_resp = ts.write_records(
-        DatabaseName=DATABASE,
-        TableName=VWAP_TABLE,
-        Records=[vwap_record],
-    )
+        if not records:
+            continue
 
-    # 5. Imprimir resultados por pantalla
-    # Si las funciones anteriores fallan, el script lanzará una excepción. 
-    # Si llega aquí, es que todo ha ido bien.
-    print("Write OK (2 tablas)")
-    print(f"Database={DATABASE} Region={REGION}")
-    
-    # Muestra el registro enviado y la respuesta del servidor de AWS para la tabla de cotizaciones
-    print(f"Tabla {QUOTES_TABLE} record:")
-    print(json.dumps(quote_record, indent=2))
-    print("Response:")
-    print(json.dumps(quote_resp, default=str, indent=2))
-    
-    # Muestra el registro enviado y la respuesta del servidor de AWS para la tabla VWAP
-    print(f"Tabla {VWAP_TABLE} record:")
-    print(json.dumps(vwap_record, indent=2))
-    print("Response:")
-    print(json.dumps(vwap_resp, default=str, indent=2))
+        # Procesa los mensajes
+        for topic_partition, consumer_records in records.items():
+            topic_name = topic_partition.topic
+
+            for consumer_record in consumer_records:
+                value = consumer_record.value
+                kafka_ts_ms = consumer_record.timestamp
+
+                try:
+                    if topic_name == TOPIC_S5_1:
+                        # Mensaje crudo (close/volume). Se escribe solo en sol_quotes_raw_bigdaddyks
+                        quote_record = build_quote_record(value, kafka_ts_ms)
+
+                        quote_resp = ts.write_records(
+                            DatabaseName=DATABASE,
+                            TableName=QUOTES_TABLE,
+                            Records=[quote_record],
+                        )
+
+                        print("Write OK -> quotes", json.dumps(quote_record))
+
+                    elif topic_name == TOPIC_S5_2:
+                        # Mensaje agregado (VWAP 5m). Se escribe solo en sol_vwap_5m_bigdaddyks
+                        vwap_record = build_vwap_record(value, kafka_ts_ms)
+
+                        vwap_resp = ts.write_records(
+                            DatabaseName=DATABASE,
+                            TableName=VWAP_TABLE,
+                            Records=[vwap_record],
+                        )
+
+                        print("Write OK -> vwap", json.dumps(vwap_record))
+
+                    else:
+                        # Topic desconocido: lo ignoramos pero avisamos
+                        print(f"Topic no manejado: {topic_name}")
+
+                except Exception as exc:
+                    # Captura cualquier error de escritura o parsing para que el bucle siga vivo
+                    print(f"Error procesando topic {topic_name}: {exc}")
 
 
 # Este es el punto de entrada de Python. Asegura que la función main() 

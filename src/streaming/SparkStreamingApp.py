@@ -37,16 +37,25 @@ def main():
     # Los datos de Kafka vienen en binario, los pasamos a String y luego a JSON
     df_json = df_crudo.selectExpr("CAST(value AS STRING)") \
         .select(from_json(col("value"), schema_entrada).alias("data")) \
-        .select("data.*")
+        .select(
+            col("data.symbol").alias("symbol"),
+            col("data.@timestamp").alias("event_ts"),  # renombramos para evitar el '@' en nombres de columna
+            col("data.close").alias("close"),
+            col("data.volume").alias("volume"),
+        )
 
     # 3. EL CÁLCULO MÁGICO (Ventanas de 5 minutos + Fórmula VWAP)
     # Primero pre-calculamos (Precio * Volumen)
     df_precalc = df_json.withColumn("precio_x_volumen", col("close").cast("double") * col("volume").cast("double")) \
                         .withColumn("volume_num", col("volume").cast("double"))
 
+    # Watermark para permitir ventanas deslizantes y limitar estado
+    df_precalc = df_precalc.withWatermark("event_ts", "10 minutes")
+
     # Agrupamos por símbolo y por ventana de 5 minutos basándonos en el timestamp
     df_agrupado = df_precalc.groupBy(
-        window(col("@timestamp"), "5 minutes"),
+        # Ventana de 5 minutos que se desplaza cada 1 minuto
+        window(col("event_ts"), "5 minutes", "1 minute"),
         col("symbol")
     ).agg(
         _sum("precio_x_volumen").alias("sum_pv"),
@@ -54,7 +63,7 @@ def main():
     )
 
     # Calculamos el VWAP final: Sum(P*V) / Sum(V)
-    df_vwap = df_agrupado.withColumn("vwap", col("sum_pv") / col("sum_v"))
+    df_vwap = df_agrupado.filter(col("sum_v") > 0).withColumn("vwap", col("sum_pv") / col("sum_v"))
 
     # 4. DARLE EL FORMATO DE SALIDA (Para cumplir la HU-7)
     # Creamos un JSON con la estructura exacta que pide la historia de usuario
