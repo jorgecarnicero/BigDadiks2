@@ -9,9 +9,11 @@ Escucha dos topics y escribe en dos tablas Timestream:
 Este script se basa en los mensajes generados por:
 - kafka_simple_producer.py (close y volumen por vela 1m)
 - SparkStreamingApp.py (VWAP 5m)
+
+Este script lo vamos a ejecutar en la instancia de la EC2
 """
 
-# Importación de librerías necesarias
+# Importamos las librerías necesarias
 import json                  # Para formatear la salida por pantalla de forma legible (pretty print)
 import time                  # Para generar un timestamp actual para la versión del registro
 from datetime import datetime, timezone # Para el manejo y conversión de fechas
@@ -24,7 +26,7 @@ from kafka.structs import TopicPartition
 # ==========================================
 # PARÁMETROS DE CONFIGURACIÓN
 # ==========================================
-# Aquí se definen las variables globales que le dicen al script dónde escribir y qué datos usar.
+# Aquí definimos las variables globales que le dicen al script dónde escribir y qué datos usar.
 REGION = "eu-west-1"          # Región de AWS
 DATABASE = "imat3a_crypto_rt" # Base de datos en Timestream
 QUOTES_TABLE = "sol_quotes_raw_bigdaddyks"  # Tabla para las cotizaciones en crudo
@@ -40,7 +42,7 @@ TOPIC_S5_1 = "imat3a_SOL_BigDaddyks"       # Mensajes crudos: close/volume por v
 TOPIC_S5_2 = "imat3a_SOL_BigDaddyks_VWAP"  # Mensajes agregados: vwap y ventana 5m
 GROUP_ID = "imat3a_SOL_BigDaddyks"
 
-# Crea el KafkaConsumer (deserializa clave como texto y valor como JSON)
+# Creamos el KafkaConsumer (deserializa clave como texto y valor como JSON)
 CONSUMER = KafkaConsumer(
     bootstrap_servers=BOOTSTRAP_SERVERS,
     security_protocol="SASL_PLAINTEXT",
@@ -129,7 +131,7 @@ def build_vwap_record(value: dict, kafka_ts_ms: int) -> dict:
     window_start = value.get("window_start")
     window_end = value.get("window_end")
 
-    # Si no viene la ventana, usamos el timestamp Kafka como fallback
+    # Si no viene la ventana, usamos el timestamp Kafka
     time_ms = iso_to_epoch_ms(window_end) if window_end else kafka_ts_to_epoch_ms(kafka_ts_ms)
 
     return {
@@ -152,14 +154,14 @@ def build_vwap_record(value: dict, kafka_ts_ms: int) -> dict:
 # ==========================================
 
 def main() -> None:
-    # 1. Crear el cliente de AWS para escribir en Timestream
-    # Boto3 buscará tus credenciales de AWS automáticamente (variables de entorno o ~/.aws/credentials)
+    # 1. Creamos el cliente de AWS para escribir en Timestream
+    # Boto3 buscará nuestras credenciales de AWS automáticamente
     ts = boto3.client("timestream-write", region_name=REGION)
 
     # Subscribirse a los topics
     CONSUMER.subscribe([TOPIC_S5_1, TOPIC_S5_2])
 
-    # Bucle principal: lee y escribe de forma continua
+    # Bucle principal: leemos y escribimos de forma continua
     while True:
         # Lee mensajes cada segundo
         records = CONSUMER.poll(timeout_ms=1000)
@@ -208,8 +210,6 @@ def main() -> None:
                     # Captura cualquier error de escritura o parsing para que el bucle siga vivo
                     print(f"Error procesando topic {topic_name}: {exc}")
 
-
-# Este es el punto de entrada de Python. Asegura que la función main() 
-# solo se ejecute si ejecutas este archivo directamente (no si lo importas desde otro script).
 if __name__ == "__main__":
     main()
+
