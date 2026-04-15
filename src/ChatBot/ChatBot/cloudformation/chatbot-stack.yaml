@@ -1,0 +1,542 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Chatbot con Bedrock AgentCore Runtime (Strands Agents),
+  Knowledge Base con S3 Vectors, frontend en ECS Fargate con ALB.
+  Region: eu-central-1 (Frankfurt).
+
+# ============================================================================
+# PARAMETROS
+# ============================================================================
+Parameters:
+  ProjectName:
+    Type: String
+    Default: bedrock-chatbot
+
+  FrontendImageUri:
+    Type: String
+    Description: URI de la imagen Docker del frontend en ECR
+
+  AgentImageUri:
+    Type: String
+    Description: URI de la imagen Docker del agente en ECR
+
+  ModelId:
+    Type: String
+    Default: eu.amazon.nova-2-lite-v1:0
+
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+
+  EmbeddingDimension:
+    Type: Number
+    Default: 1024
+
+  FrontendCpu:
+    Type: String
+    Default: "512"
+    AllowedValues: ["256", "512", "1024"]
+
+  FrontendMemory:
+    Type: String
+    Default: "1024"
+    AllowedValues: ["512", "1024", "2048"]
+
+Resources:
+
+  # ==========================================================================
+  # VPC & NETWORKING
+  # ==========================================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ==========================================================================
+  # SECURITY GROUPS
+  # ==========================================================================
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - HTTP from internet
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  FargateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate - traffic from ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+
+  # ==========================================================================
+  # S3 - BUCKET DE DATOS PARA KNOWLEDGE BASE
+  # ==========================================================================
+  KBDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${ProjectName}-kb-data-${AWS::AccountId}"
+
+  # ==========================================================================
+  # S3 VECTORS - VECTOR STORE
+  # ==========================================================================
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    DeletionPolicy: Delete
+    Properties:
+      VectorBucketName: !Sub "${ProjectName}-vectors-${AWS::AccountId}"
+
+  VectorIndex:
+    Type: AWS::S3Vectors::Index
+    DeletionPolicy: Delete
+    DependsOn: VectorBucket
+    Properties:
+      VectorBucketName: !Sub "${ProjectName}-vectors-${AWS::AccountId}"
+      IndexName: !Sub "${ProjectName}-index"
+      DataType: float32
+      Dimension: !Ref EmbeddingDimension
+      DistanceMetric: cosine
+      MetadataConfiguration:
+        NonFilterableMetadataKeys:
+          - "AMAZON_BEDROCK_CHUNK_CONTEXT"
+          - "AMAZON_BEDROCK_TEXT_CHUNK"
+          - "AMAZON_BEDROCK_METADATA"
+          - "x-amz-bedrock-kb-source-uri"
+          - "x-amz-bedrock-kb-data-source-id"
+          - "x-amz-bedrock-kb-chunk-id"
+
+  # ==========================================================================
+  # IAM - ROL PARA KNOWLEDGE BASE
+  # ==========================================================================
+  KBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-kb-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: KBPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt KBDataBucket.Arn
+                  - !Sub "${KBDataBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3vectors:*
+                Resource:
+                  - !GetAtt VectorBucket.VectorBucketArn
+                  - !Sub "${VectorBucket.VectorBucketArn}/*"
+
+  # ==========================================================================
+  # BEDROCK KNOWLEDGE BASE + DATA SOURCE
+  # ==========================================================================
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn:
+      - KBRole
+      - VectorIndex
+    Properties:
+      Name: !Sub "${ProjectName}-kb"
+      Description: Knowledge Base con RAG para el chatbot
+      RoleArn: !GetAtt KBRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}"
+      StorageConfiguration:
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          VectorBucketArn: !GetAtt VectorBucket.VectorBucketArn
+          IndexName: !Sub "${ProjectName}-index"
+
+  KBDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: !Sub "${ProjectName}-datasource"
+      Description: Documentos S3 para RAG
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt KBDataBucket.Arn
+
+  # ==========================================================================
+  # IAM - ROL PARA AGENTCORE RUNTIME
+  # ==========================================================================
+  AgentCoreRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-agentcore-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AgentCorePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ModelId}"
+                  - !Sub "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
+              - Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+
+  # ==========================================================================
+  # BEDROCK AGENTCORE RUNTIME (Strands Agents)
+  # ==========================================================================
+  AgentCoreRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    DependsOn: KnowledgeBase
+    Properties:
+      AgentRuntimeName: bedrockChatbotAgent
+      Description: Strands Agent con RAG para chatbot
+      RoleArn: !GetAtt AgentCoreRole.Arn
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Ref AgentImageUri
+      NetworkConfiguration:
+        NetworkMode: PUBLIC
+      ProtocolConfiguration: HTTP
+      EnvironmentVariables:
+        AWS_REGION: !Ref AWS::Region
+        KNOWLEDGE_BASE_ID: !Ref KnowledgeBase
+        MODEL_ID: !Ref ModelId
+      Tags:
+        Project: !Ref ProjectName
+
+
+  # ==========================================================================
+  # ECS CLUSTER + FARGATE (FRONTEND)
+  # ==========================================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectName}-cluster"
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}-frontend"
+      RetentionInDays: 7
+
+  FrontendTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FrontendPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ModelId}"
+                  - !Sub "arn:aws:bedrock:*::foundation-model/amazon.nova-2-lite-v1:0"
+              - Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+
+  FrontendExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-exec-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "${ProjectName}-frontend"
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref FrontendCpu
+      Memory: !Ref FrontendMemory
+      ExecutionRoleArn: !GetAtt FrontendExecutionRole.Arn
+      TaskRoleArn: !GetAtt FrontendTaskRole.Arn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: KNOWLEDGE_BASE_ID
+              Value: !Ref KnowledgeBase
+            - Name: MODEL_ID
+              Value: !Ref ModelId
+            - Name: AGENTCORE_ENDPOINT
+              Value: !Sub "https://${AgentCoreRuntime.AgentRuntimeId}.bedrock-agentcore.${AWS::Region}.amazonaws.com"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  # ==========================================================================
+  # ALB
+  # ==========================================================================
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg"
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 10
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ==========================================================================
+  # ECS SERVICE
+  # ==========================================================================
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: !Sub "${ProjectName}-frontend"
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref FargateSecurityGroup
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTargetGroup
+
+# ============================================================================
+# OUTPUTS
+# ============================================================================
+Outputs:
+  ChatbotURL:
+    Description: URL del chatbot
+    Value: !Sub "http://${ALB.DNSName}"
+
+  KnowledgeBaseId:
+    Value: !Ref KnowledgeBase
+
+  DataSourceId:
+    Value: !Ref KBDataSource
+
+  KBDataBucketName:
+    Value: !Ref KBDataBucket
+
+  AgentCoreRuntimeId:
+    Value: !GetAtt AgentCoreRuntime.AgentRuntimeId
+
+  AgentCoreEndpoint:
+    Value: !Sub "https://${AgentCoreRuntime.AgentRuntimeId}.bedrock-agentcore.${AWS::Region}.amazonaws.com"
